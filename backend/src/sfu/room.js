@@ -2,8 +2,15 @@ import { getNextWorker } from "./worker.js";
 import { mediaCodecs, webRtcTransportOptions } from "./config.js";
 import logger from "../utils/logger.js";
 
-// One per meeting room: wraps a mediasoup Router and tracks each peer's
-// send/recv transports along with their producers and consumers.
+// One SfuRoom per meeting room. Wraps a mediasoup Router and tracks per-peer
+// state.
+//
+// mediasoup model in one paragraph: every peer creates two WebRTC transports
+// — a SEND transport (carries their outgoing tracks → producers) and a RECV
+// transport (carries incoming tracks ← consumers). The Router sits in the
+// middle and forwards packets between producers and consumers without
+// touching media (no re-encoding), which is what lets the SFU scale past
+// what a P2P mesh can handle.
 export class SfuRoom {
     constructor(roomId) {
         this.roomId = roomId;

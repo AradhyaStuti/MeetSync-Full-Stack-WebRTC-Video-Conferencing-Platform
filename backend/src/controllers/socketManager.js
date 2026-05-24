@@ -20,6 +20,12 @@ import * as store from "../store/roomStore.js";
 // Re-exported so existing tests keep working without path churn.
 export { isRateLimited } from "./socketHandlers/state.js";
 
+// Fire-and-forget wrapper for Redis writes. We don't await these because the
+// in-memory state is the source of truth — Redis is just for cross-instance
+// sharing — but we still want failures in the log.
+const sync = (promise) => promise.catch(err =>
+    logger.warn("Redis store write failed", { error: err.message }));
+
 function normalizePath(rawPath) {
     let path = String(rawPath);
     try { path = new URL(path).pathname; } catch { /* already a pathname */ }
@@ -37,9 +43,9 @@ async function addUserToRoom(socket, io, path, username, avatar) {
     rooms.get(path).set(socket.id, { username, avatar });
     roomLastActivity.set(path, Date.now());
 
-    store.setSocketRoom(socket.id, path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
-    store.addParticipant(path, socket.id, { username, avatar }).catch(err => logger.warn("Redis store write failed", { error: err.message }));
-    store.setActivity(path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+    sync(store.setSocketRoom(socket.id, path));
+    sync(store.addParticipant(path, socket.id, { username, avatar }));
+    sync(store.setActivity(path));
 
     const participants = [...rooms.get(path)].map(([sid, info]) => ({ socketId: sid, ...info }));
 
@@ -120,7 +126,7 @@ export const connectToSocket = async (server) => {
             // First socket in an empty room is always the host and skips the lobby.
             if (!roomHosts.has(path) || !rooms.has(path) || rooms.get(path).size === 0) {
                 roomHosts.set(path, socket.id);
-                store.setHost(path, socket.id).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+                sync(store.setHost(path, socket.id));
                 await addUserToRoom(socket, io, path, username, avatar);
                 socket.emit("host-status", true);
                 logger.info("User is host", { socketId: socket.id, room: path.slice(-20) });
@@ -132,8 +138,8 @@ export const connectToSocket = async (server) => {
             waitingRoom.get(path).set(socket.id, { username, avatar });
             // socketRoom is set here too so disconnect cleanup still finds the path.
             socketRoom.set(socket.id, path);
-            store.addToWaitingRoom(path, socket.id, { username, avatar }).catch(err => logger.warn("Redis store write failed", { error: err.message }));
-            store.setSocketRoom(socket.id, path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+            sync(store.addToWaitingRoom(path, socket.id, { username, avatar }));
+            sync(store.setSocketRoom(socket.id, path));
 
             socket.emit("waiting-room-status", { status: "waiting" });
             sendWaitingListToHost(io, path);
@@ -153,8 +159,8 @@ export const connectToSocket = async (server) => {
 
             // Wipe the temporary mapping so addUserToRoom can write a fresh one.
             socketRoom.delete(targetSocketId);
-            store.removeFromWaitingRoom(path, targetSocketId).catch(err => logger.warn("Redis store write failed", { error: err.message }));
-            store.deleteSocketRoom(targetSocketId).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+            sync(store.removeFromWaitingRoom(path, targetSocketId));
+            sync(store.deleteSocketRoom(targetSocketId));
 
             const targetSocket = io.sockets.sockets.get(targetSocketId);
             if (!targetSocket) return;
@@ -175,8 +181,8 @@ export const connectToSocket = async (server) => {
             if (waiting.size === 0) waitingRoom.delete(path);
 
             socketRoom.delete(targetSocketId);
-            store.removeFromWaitingRoom(path, targetSocketId).catch(err => logger.warn("Redis store write failed", { error: err.message }));
-            store.deleteSocketRoom(targetSocketId).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+            sync(store.removeFromWaitingRoom(path, targetSocketId));
+            sync(store.deleteSocketRoom(targetSocketId));
 
             const targetSocket = io.sockets.sockets.get(targetSocketId);
             if (targetSocket) {
@@ -195,7 +201,7 @@ export const connectToSocket = async (server) => {
             for (const [sid, { username, avatar }] of [...waiting]) {
                 waiting.delete(sid);
                 socketRoom.delete(sid);
-                store.deleteSocketRoom(sid).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+                sync(store.deleteSocketRoom(sid));
                 const targetSocket = io.sockets.sockets.get(sid);
                 if (targetSocket) {
                     targetSocket.emit("waiting-room-status", { status: "admitted" });
@@ -203,7 +209,7 @@ export const connectToSocket = async (server) => {
                 }
             }
             waitingRoom.delete(path);
-            store.clearWaitingRoom(path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+            sync(store.clearWaitingRoom(path));
             sendWaitingListToHost(io, path);
         });
 
@@ -230,14 +236,14 @@ function leaveCurrentRoom(socket, io) {
     if (!path) return;
 
     socketRoom.delete(socket.id);
-    store.deleteSocketRoom(socket.id).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+    sync(store.deleteSocketRoom(socket.id));
 
     // If they were only in the waiting room, no peer cleanup is needed.
     const waiting = waitingRoom.get(path);
     if (waiting && waiting.has(socket.id)) {
         waiting.delete(socket.id);
         if (waiting.size === 0) waitingRoom.delete(path);
-        store.removeFromWaitingRoom(path, socket.id).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+        sync(store.removeFromWaitingRoom(path, socket.id));
         sendWaitingListToHost(io, path);
         socket.leave(path);
         return;
@@ -258,7 +264,7 @@ function leaveCurrentRoom(socket, io) {
     const room = rooms.get(path);
     if (room) {
         room.delete(socket.id);
-        store.removeParticipant(path, socket.id).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+        sync(store.removeParticipant(path, socket.id));
         io.to(path).emit("user-left", socket.id);
 
         // If the host left, hand the role to whoever is next in the room.
@@ -266,13 +272,13 @@ function leaveCurrentRoom(socket, io) {
             if (room.size > 0) {
                 const newHostId = room.keys().next().value;
                 roomHosts.set(path, newHostId);
-                store.setHost(path, newHostId).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+                sync(store.setHost(path, newHostId));
                 io.to(newHostId).emit("host-status", true);
                 sendWaitingListToHost(io, path);
                 logger.info("Host promoted", { newHost: newHostId, room: path.slice(-20) });
             } else {
                 roomHosts.delete(path);
-                store.deleteHost(path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+                sync(store.deleteHost(path));
                 // Nobody left to host; reject anyone still in the lobby.
                 const pendingWaiting = waitingRoom.get(path);
                 if (pendingWaiting && pendingWaiting.size > 0) {
@@ -280,10 +286,10 @@ function leaveCurrentRoom(socket, io) {
                         const ws = io.sockets.sockets.get(sid);
                         if (ws) ws.emit("waiting-room-status", { status: "rejected" });
                         socketRoom.delete(sid);
-                        store.deleteSocketRoom(sid).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+                        sync(store.deleteSocketRoom(sid));
                     }
                     waitingRoom.delete(path);
-                    store.clearWaitingRoom(path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+                    sync(store.clearWaitingRoom(path));
                 }
             }
         }
@@ -294,7 +300,7 @@ function leaveCurrentRoom(socket, io) {
             roomLastActivity.delete(path);
             roomHosts.delete(path);
             waitingRoom.delete(path);
-            store.deleteRoom(path).catch(err => logger.warn("Redis store write failed", { error: err.message }));
+            sync(store.deleteRoom(path));
         }
     }
 

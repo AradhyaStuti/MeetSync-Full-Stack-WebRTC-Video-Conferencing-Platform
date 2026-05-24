@@ -3,10 +3,11 @@ info:
   title: NexusMeet API
   version: 2.0.0
   description: |
-    REST API for NexusMeet — an encrypted real-time communication platform.
+    REST API for NexusMeet.
 
     ## Authentication
-    Protected endpoints require a JWT in the `x-auth-token` header.
+    Protected endpoints require a JWT in the `x-auth-token` header
+    (not the standard `Authorization: Bearer` — see `securitySchemes.tokenAuth`).
     Obtain a token via `POST /api/v1/users/login`.
 
     ## Rate Limiting
@@ -117,7 +118,7 @@ paths:
       tags: [History]
       summary: Fetch meeting history for the authenticated user
       security:
-        - bearerAuth: []
+        - tokenAuth: []
       responses:
         '200':
           description: List of past meetings (newest first, max 100)
@@ -135,7 +136,7 @@ paths:
       tags: [History]
       summary: Save a meeting to history
       security:
-        - bearerAuth: []
+        - tokenAuth: []
       requestBody:
         required: true
         content:
@@ -164,7 +165,7 @@ paths:
       tags: [History]
       summary: Delete a meeting from history
       security:
-        - bearerAuth: []
+        - tokenAuth: []
       requestBody:
         required: true
         content:
@@ -283,7 +284,7 @@ paths:
 
 components:
   securitySchemes:
-    bearerAuth:
+    tokenAuth:
       type: apiKey
       in: header
       name: x-auth-token

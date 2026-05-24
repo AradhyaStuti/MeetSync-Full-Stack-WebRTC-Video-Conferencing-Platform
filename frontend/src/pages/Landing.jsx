@@ -89,7 +89,7 @@ export default function LandingPage() {
                                 <div className="mockupDot red"></div>
                                 <div className="mockupDot yellow"></div>
                                 <div className="mockupDot green"></div>
-                                <span className="mockupTitle">NexusMeet — Room #meet2024</span>
+                                <span className="mockupTitle">NexusMeet — /demo-room</span>
                             </div>
                             <div className="mockupLive">
                                 <div className="mockupLiveDot"></div>

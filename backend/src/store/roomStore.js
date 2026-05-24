@@ -1,5 +1,5 @@
 // Redis-backed mirror of the in-memory room state so multiple server instances
-// can share rooms. Every function no-ops when Redis isn't available.
+// can share rooms. Every export is a no-op when Redis isn't connected.
 import { getRedis } from "../utils/redis.js";
 import logger from "../utils/logger.js";
 
@@ -8,141 +8,100 @@ const MAX_MESSAGES = 200;
 const MESSAGE_RATE_LIMIT = 10;
 const MESSAGE_RATE_WINDOW = 10; // seconds
 
-function rk(...parts) {
-    return parts.join(":");
-}
+const rk = (...parts) => parts.join(":");
+
+// Wraps a function so it short-circuits to `null` when Redis isn't available.
+// The wrapped fn receives the redis client as its first argument.
+const withRedis = (fn) => async (...args) => {
+    const redis = getRedis();
+    if (!redis) return null;
+    return fn(redis, ...args);
+};
 
 // participants
 
-export async function addParticipant(path, socketId, { username, avatar }) {
-    const redis = getRedis();
-    if (!redis) return;
+export const addParticipant = withRedis(async (redis, path, socketId, { username, avatar }) => {
     const key = rk("room", path, "participants");
     await redis.hSet(key, socketId, JSON.stringify({ username, avatar }));
     await redis.expire(key, KEY_TTL);
-}
+});
 
-export async function removeParticipant(path, socketId) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.hDel(rk("room", path, "participants"), socketId);
-}
+export const removeParticipant = withRedis((redis, path, socketId) =>
+    redis.hDel(rk("room", path, "participants"), socketId));
 
-export async function getParticipants(path) {
-    const redis = getRedis();
-    if (!redis) return null;
+export const getParticipants = withRedis(async (redis, path) => {
     const raw = await redis.hGetAll(rk("room", path, "participants"));
     if (!raw || Object.keys(raw).length === 0) return null;
     return new Map(Object.entries(raw).map(([sid, json]) => [sid, JSON.parse(json)]));
-}
+});
 
-export async function getParticipantCount(path) {
-    const redis = getRedis();
-    if (!redis) return null;
-    return redis.hLen(rk("room", path, "participants"));
-}
+export const getParticipantCount = withRedis((redis, path) =>
+    redis.hLen(rk("room", path, "participants")));
 
 // host
 
-export async function setHost(path, socketId) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.set(rk("room", path, "host"), socketId, { EX: KEY_TTL });
-}
+export const setHost = withRedis((redis, path, socketId) =>
+    redis.set(rk("room", path, "host"), socketId, { EX: KEY_TTL }));
 
-export async function getHost(path) {
-    const redis = getRedis();
-    if (!redis) return null;
-    return redis.get(rk("room", path, "host"));
-}
+export const getHost = withRedis((redis, path) =>
+    redis.get(rk("room", path, "host")));
 
-export async function deleteHost(path) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.del(rk("room", path, "host"));
-}
+export const deleteHost = withRedis((redis, path) =>
+    redis.del(rk("room", path, "host")));
 
 // waiting room
 
-export async function addToWaitingRoom(path, socketId, { username, avatar }) {
-    const redis = getRedis();
-    if (!redis) return;
+export const addToWaitingRoom = withRedis(async (redis, path, socketId, { username, avatar }) => {
     const key = rk("room", path, "waiting");
     await redis.hSet(key, socketId, JSON.stringify({ username, avatar }));
     await redis.expire(key, KEY_TTL);
-}
+});
 
-export async function removeFromWaitingRoom(path, socketId) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.hDel(rk("room", path, "waiting"), socketId);
-}
+export const removeFromWaitingRoom = withRedis((redis, path, socketId) =>
+    redis.hDel(rk("room", path, "waiting"), socketId));
 
-export async function getWaitingRoom(path) {
-    const redis = getRedis();
-    if (!redis) return null;
+export const getWaitingRoom = withRedis(async (redis, path) => {
     const raw = await redis.hGetAll(rk("room", path, "waiting"));
     if (!raw || Object.keys(raw).length === 0) return null;
     return new Map(Object.entries(raw).map(([sid, json]) => [sid, JSON.parse(json)]));
-}
+});
 
-export async function clearWaitingRoom(path) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.del(rk("room", path, "waiting"));
-}
+export const clearWaitingRoom = withRedis((redis, path) =>
+    redis.del(rk("room", path, "waiting")));
 
 // socket -> room mapping
 
-export async function setSocketRoom(socketId, path) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.set(rk("socket", socketId, "room"), path, { EX: KEY_TTL });
-}
+export const setSocketRoom = withRedis((redis, socketId, path) =>
+    redis.set(rk("socket", socketId, "room"), path, { EX: KEY_TTL }));
 
-export async function getSocketRoom(socketId) {
-    const redis = getRedis();
-    if (!redis) return null;
-    return redis.get(rk("socket", socketId, "room"));
-}
+export const getSocketRoom = withRedis((redis, socketId) =>
+    redis.get(rk("socket", socketId, "room")));
 
-export async function deleteSocketRoom(socketId) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.del(rk("socket", socketId, "room"));
-}
+export const deleteSocketRoom = withRedis((redis, socketId) =>
+    redis.del(rk("socket", socketId, "room")));
 
 // chat messages
 
-export async function pushMessage(path, msg) {
-    const redis = getRedis();
-    if (!redis) return;
+export const pushMessage = withRedis(async (redis, path, msg) => {
     const key = rk("room", path, "messages");
     await redis.rPush(key, JSON.stringify(msg));
     await redis.lTrim(key, -MAX_MESSAGES, -1);
     await redis.expire(key, KEY_TTL);
-}
+});
 
-export async function getMessages(path) {
-    const redis = getRedis();
-    if (!redis) return null;
+export const getMessages = withRedis(async (redis, path) => {
     const raw = await redis.lRange(rk("room", path, "messages"), 0, -1);
     return raw.map(json => JSON.parse(json));
-}
+});
 
 // activity tracking
 
-export async function setActivity(path) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.set(rk("room", path, "activity"), Date.now().toString(), { EX: KEY_TTL });
-}
+export const setActivity = withRedis((redis, path) =>
+    redis.set(rk("room", path, "activity"), Date.now().toString(), { EX: KEY_TTL }));
 
 // rate limiting
 
-export async function isRateLimitedRedis(socketId) {
-    const redis = getRedis();
-    if (!redis) return null; // fall back to in-memory
+export const isRateLimitedRedis = withRedis(async (redis, socketId) => {
     const key = rk("ratelimit", socketId);
     const now = Date.now();
     await redis.zRemRangeByScore(key, "-inf", String(now - MESSAGE_RATE_WINDOW * 1000));
@@ -151,13 +110,11 @@ export async function isRateLimitedRedis(socketId) {
     await redis.zAdd(key, { score: now, value: String(now) });
     await redis.expire(key, MESSAGE_RATE_WINDOW);
     return false;
-}
+});
 
 // room cleanup
 
-export async function deleteRoom(path) {
-    const redis = getRedis();
-    if (!redis) return;
+export const deleteRoom = withRedis(async (redis, path) => {
     await Promise.all([
         redis.del(rk("room", path, "participants")),
         redis.del(rk("room", path, "host")),
@@ -166,10 +123,7 @@ export async function deleteRoom(path) {
         redis.del(rk("room", path, "activity")),
     ]);
     logger.info("Redis room keys cleaned", { room: path.slice(-20) });
-}
+});
 
-export async function clearRateLimitRedis(socketId) {
-    const redis = getRedis();
-    if (!redis) return;
-    await redis.del(rk("ratelimit", socketId));
-}
+export const clearRateLimitRedis = withRedis((redis, socketId) =>
+    redis.del(rk("ratelimit", socketId)));

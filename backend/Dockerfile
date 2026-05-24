@@ -1,7 +1,7 @@
-# ── Build stage: install deps (including native mediasoup build) ──
+# Build stage — needs Python + build-essential because mediasoup compiles
+# a C++ worker during `npm install`.
 FROM node:20-slim AS deps
 
-# mediasoup requires Python + build tools to compile C++ worker
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -12,23 +12,18 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# ── Runtime stage ──
+# Runtime stage — the compiled mediasoup worker binary is already in
+# node_modules, so we don't need Python or compilers here.
 FROM node:20-slim AS runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Expose HTTP API + Socket.IO port
+# HTTP API + Socket.IO
 EXPOSE 8000
-
-# Expose mediasoup RTC UDP/TCP port range (configured in src/sfu/config.js)
+# mediasoup RTC ports (range configured in src/sfu/config.js)
 EXPOSE 10000-10100/udp
 EXPOSE 10000-10100/tcp
 

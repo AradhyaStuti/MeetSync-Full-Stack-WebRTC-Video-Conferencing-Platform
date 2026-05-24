@@ -38,7 +38,9 @@ export default function VideoMeetComponent() {
     const sfuClientRef = useRef(null)
     const sfuModeRef = useRef(false)
     const remoteVideoElems = useRef({})
-    const videoRef = useRef([])
+    // Mirror of `videos` state. Socket handlers run in stale closures and can't
+    // see the latest state directly, so we read/mutate this ref instead.
+    const videosRef = useRef([])
 
     const [askForUsername, setAskForUsername] = useState(true)
     const [username, setUsername] = useState('')
@@ -61,13 +63,16 @@ export default function VideoMeetComponent() {
         return () => cleanupCall()
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Re-acquire media only when the booleans flip, not on every render.
+    // Re-acquire media only when the booleans flip, not on every render. The
+    // *Available flags and the media.* method identities aren't real deps —
+    // they change each render but reading the latest value is fine.
     useEffect(() => {
         if (media.video !== undefined && media.audio !== undefined) {
             media.getUserMedia(media.video, media.audio, media.videoAvailable, media.audioAvailable)
         }
     }, [media.video, media.audio]) // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Same story for screen share — only react to the boolean toggle.
     useEffect(() => {
         if (media.screen !== undefined) media.getDisplayMedia(media.screen)
     }, [media.screen]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -79,6 +84,9 @@ export default function VideoMeetComponent() {
         sfuClientRef.current.setPreferredLayer(layer)
     }, [networkQuality])
 
+    // Keyboard shortcuts while in a meeting. We only rebind when the join
+    // state or the toggled flags change; the handler callbacks themselves are
+    // stable refs from the hooks above.
     useEffect(() => {
         if (askForUsername) return
         const handleKeyDown = (e) => {
@@ -118,18 +126,18 @@ export default function VideoMeetComponent() {
 
     // P2P: receive a full stream from a peer.
     const addRemoteStream = useCallback((socketId, stream) => {
-        const existing = videoRef.current.find(v => v.socketId === socketId)
+        const existing = videosRef.current.find(v => v.socketId === socketId)
         if (existing) {
             setVideos(prev => {
                 const updated = prev.map(v => v.socketId === socketId ? { ...v, stream } : v)
-                videoRef.current = updated
+                videosRef.current = updated
                 return updated
             })
         } else {
             const newVideo = { socketId, stream, autoplay: true, playsinline: true }
             setVideos(prev => {
                 const updated = [...prev, newVideo]
-                videoRef.current = updated
+                videosRef.current = updated
                 return updated
             })
         }
@@ -137,12 +145,12 @@ export default function VideoMeetComponent() {
 
     // SFU: tracks arrive one at a time, so merge them onto an existing stream.
     const addRemoteTrack = useCallback((socketId, track) => {
-        const existing = videoRef.current.find(v => v.socketId === socketId)
+        const existing = videosRef.current.find(v => v.socketId === socketId)
         if (existing) {
             existing.stream.addTrack(track)
             setVideos(prev => {
                 const updated = prev.map(v => v.socketId === socketId ? { ...v, stream: existing.stream } : v)
-                videoRef.current = updated
+                videosRef.current = updated
                 return updated
             })
         } else {
@@ -150,7 +158,7 @@ export default function VideoMeetComponent() {
             const newVideo = { socketId, stream, autoplay: true, playsinline: true }
             setVideos(prev => {
                 const updated = [...prev, newVideo]
-                videoRef.current = updated
+                videosRef.current = updated
                 return updated
             })
         }
@@ -209,7 +217,7 @@ export default function VideoMeetComponent() {
             room.removeParticipant(id)
             setVideos(prev => prev.filter(v => v.socketId !== id))
             room.setPinnedVideo(prev => prev === id ? null : prev)
-            videoRef.current = videoRef.current.filter(v => v.socketId !== id)
+            videosRef.current = videosRef.current.filter(v => v.socketId !== id)
         })
 
         socketRef.current.on('hand-raise', (id, raised) => room.updateRemoteHandRaise(id, raised))
